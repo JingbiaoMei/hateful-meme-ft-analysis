@@ -24,7 +24,7 @@ from pathlib import Path
 
 # Import the HuggingFaceResponseGenerator from generate_w_hf.py
 from generate_w_hf import HuggingFaceResponseGenerator
-
+from config import prompt
 
 def load_input_data(input_path: str) -> List[Dict[str, Any]]:
     """
@@ -159,43 +159,23 @@ def standardize_entry_format(entry: Dict[str, Any], line_num: int) -> Optional[D
         return None
 
 
-def get_classification_prompts() -> List[str]:
-    """
-    Get different prompts for harmful/hateful meme classification.
-    These work across different datasets (FB, MAMI, HarMeme, PrideMM).
-    """
-    return [
-        "Analyze this meme and determine if it contains harmful or hateful content. Consider both the image and text. Provide a clear classification (harmful/hateful or not harmful/hateful) and explain your reasoning.",
-        
-        "Look at this meme carefully. Does it contain hate speech, discriminatory content, or offensive material targeting individuals or groups? Classify it as harmful or not harmful and justify your decision.",
-        
-        "Examine this meme for any harmful, hateful, discriminatory, or offensive content. Consider the interaction between the image and text. Is this meme harmful? Explain your analysis.",
-        
-        "Please classify this meme as either harmful or not harmful. Harmful content includes material that attacks, threatens, demeans, or spreads negativity about individuals or groups. Provide detailed reasoning.",
-        
-        "Evaluate whether this meme contains harmful content by analyzing both visual and textual elements. Consider context, stereotypes, potential harm, and social impact. Give a classification and explanation.",
-        
-        "Assess this meme for harmful content including but not limited to: hate speech, discrimination, harassment, stereotyping, or content that could cause psychological or social harm. Classify and explain.",
-        
-        "Determine if this meme promotes harmful ideologies, contains offensive material, or could be considered inappropriate or hurtful. Analyze the content and provide a clear classification with reasoning."
-    ]
 
 
 def generate_responses_for_entry(
     entry: Dict[str, Any],
     generator: HuggingFaceResponseGenerator,
-    prompts: List[str],
+    prompts: str,
     image_base_path: Optional[str],
     num_responses: int,
     temperature_range: tuple = (0.3, 1.0)
 ) -> Dict[str, Any]:
     """
-    Generate multiple responses for a single data entry using different prompts and temperatures.
+    Generate multiple responses for a single data entry.
     
     Args:
         entry: Data entry with id, image, text, label
         generator: HuggingFaceResponseGenerator instance
-        prompts: List of different prompts to use
+        prompt: Prompt to use for response generation
         image_base_path: Base path for images
         num_responses: Number of responses to generate
         temperature_range: Range of temperatures to sample from
@@ -558,7 +538,7 @@ def main():
     
     # Get classification prompts
     prompts = get_classification_prompts()
-    print(f"Using {len(prompts)} different prompts for diversity")
+
     
     # Generate responses for each entry
     print("Generating responses...")
@@ -604,7 +584,6 @@ def main():
     print(f"Output saved to: {args.output_file}")
     print(f"Total DPO examples: {len(dpo_data)}")
     print("=" * 60)
-
 
 if __name__ == "__main__":
     main()
