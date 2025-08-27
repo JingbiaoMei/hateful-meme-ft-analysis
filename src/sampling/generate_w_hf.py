@@ -284,6 +284,150 @@ class HuggingFaceResponseGenerator:
         
         return response if response else None
 
+    def generate_batch_responses(self, 
+                               prompts: List[str], 
+                               image_paths: Optional[List[str]] = None,
+                               images: Optional[List[Image.Image]] = None,
+                               **generation_kwargs) -> List[Optional[str]]:
+        """
+        Generate multiple responses in batch for efficiency.
+        
+        Args:
+            prompts: List of text prompts for generation
+            image_paths: List of image file paths (optional)
+            images: List of PIL Image objects (optional, takes precedence over image_paths)
+            **generation_kwargs: Additional generation parameters
+            
+        Returns:
+            List of generated response texts (None for failed generations)
+        """
+        batch_size = len(prompts)
+        responses = []
+        
+        try:
+            # Load images if paths provided
+            if images is None and image_paths is not None:
+                images = []
+                for image_path in image_paths:
+                    if image_path is not None:
+                        image = self.load_image(image_path)
+                        images.append(image)
+                    else:
+                        images.append(None)
+            elif images is None:
+                images = [None] * batch_size
+            
+            # Generate based on model type
+            if self.model_type == "qwen2.5-vl":
+                responses = self._generate_batch_qwen2_5_vl(prompts, images, **generation_kwargs)
+            else:
+                # Fallback to individual generation for non-Qwen models
+                for i, (prompt, image) in enumerate(zip(prompts, images)):
+                    response = self._generate_generic(prompt, image, **generation_kwargs)
+                    responses.append(response)
+                
+        except Exception as e:
+            print(f"Error in batch generation, falling back to individual: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to individual generation
+            responses = []
+            for i, (prompt, image) in enumerate(zip(prompts, images)):
+                try:
+                    response = self.generate_response(prompt, image=image, **generation_kwargs)
+                    responses.append(response)
+                except Exception as individual_e:
+                    print(f"Error in individual generation {i}: {individual_e}")
+                    responses.append(None)
+        
+        return responses
+    
+    def _generate_batch_qwen2_5_vl(self, prompts: List[str], images: List[Optional[Image.Image]], **generation_kwargs) -> List[Optional[str]]:
+        """Generate batch responses using Qwen2.5-VL model."""
+        # For now, let's use a simpler approach that mimics the single generation
+        # but processes multiple at once when possible
+        
+        batch_text_inputs = []
+        batch_image_inputs = []
+        batch_video_inputs = []
+        
+        # Prepare each message individually but collect for batch processing
+        for prompt, image in zip(prompts, images):
+            # Prepare messages the same way as single generation
+            content = [{"type": "text", "text": prompt}]
+            if image is not None:
+                content.insert(0, {"type": "image", "image": image})
+            
+            messages = [{"role": "user", "content": content}]
+            
+            # Apply chat template
+            text_input = self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            batch_text_inputs.append(text_input)
+            
+            # Process vision info for this sample
+            try:
+                image_inputs, video_inputs = process_vision_info(messages)
+                # Handle the case where process_vision_info returns None or empty
+                if image_inputs:
+                    batch_image_inputs.extend(image_inputs)
+                if video_inputs:
+                    batch_video_inputs.extend(video_inputs)
+            except Exception as vision_e:
+                print(f"Warning: Error processing vision info for one sample: {vision_e}")
+                # Continue without this sample's vision data
+                continue
+        
+        # If we have no valid samples, return empty list
+        if not batch_text_inputs:
+            return [None] * len(prompts)
+        
+        # Process batch inputs
+        try:
+            inputs = self.processor(
+                text=batch_text_inputs,
+                images=batch_image_inputs if batch_image_inputs else None,
+                videos=batch_video_inputs if batch_video_inputs else None,
+                padding=True,
+                return_tensors="pt",
+            )
+        except Exception as e:
+            print(f"Error in processor batch processing: {e}")
+            raise e
+        
+        # Move to device
+        inputs = inputs.to(self.device)
+        
+        # Set generation parameters
+        gen_kwargs = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": self.do_sample,
+            "temperature": self.temperature,
+            **generation_kwargs
+        }
+        
+        # Generate
+        with torch.no_grad():
+            generated_ids = self.model.generate(**inputs, **gen_kwargs)
+        
+        # Decode responses
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        responses = self.processor.batch_decode(
+            generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )
+        
+        # Ensure we return the correct number of responses
+        result = [response if response else None for response in responses]
+        
+        # Pad with None if we have fewer responses than expected
+        while len(result) < len(prompts):
+            result.append(None)
+            
+        return result[:len(prompts)]  # Truncate if we somehow have too many
+
 
 def generate_dpo_responses(data_entries: List[Dict[str, Any]], 
                           generator: HuggingFaceResponseGenerator,

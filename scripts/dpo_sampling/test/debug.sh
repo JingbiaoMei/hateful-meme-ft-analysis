@@ -1,3 +1,5 @@
+# Use cuda device 1
+export CUDA_VISIBLE_DEVICES=1
 python src/sampling/generate_dpo_data.py \
     --input_data data/gt/MAMI/train.jsonl \
     --image_base_path data/image/MAMI/All \
@@ -7,4 +9,6 @@ python src/sampling/generate_dpo_data.py \
     --model_name Qwen/Qwen2.5-VL-7B-Instruct \
     --temperature 0.7 \
     --max_new_tokens 150 \
-    --max_pixels 401408
+    --max_pixels 401408 \
+    --batch_size 4 \
+    --use_flash_attention

@@ -145,10 +145,11 @@ def generate_responses_for_entry(
     prompt: str,
     image_base_path: Optional[str],
     num_responses: int,
-    temperature: float = 0.7
+    temperature: float = 0.7,
+    batch_size: int = 8
 ) -> Dict[str, Any]:
     """
-    Generate multiple responses for a single data entry.
+    Generate multiple responses for a single data entry using batch operations.
     
     Args:
         entry: Data entry with id, image, text, label
@@ -157,6 +158,7 @@ def generate_responses_for_entry(
         image_base_path: Base path for images
         num_responses: Number of responses to generate
         temperature: Fixed temperature to use for sampling
+        batch_size: Number of responses to generate in each batch (default: 8)
         
     Returns:
         Dictionary with original entry data and generated responses
@@ -174,29 +176,63 @@ def generate_responses_for_entry(
     
     responses = []
     
-    for i in range(num_responses):
-        print(f"Generating response {i+1}/{num_responses} for entry {entry.get('id', 'unknown')} (temp={temperature:.2f})")
+    # Calculate number of batches needed
+    num_batches = (num_responses + batch_size - 1) // batch_size
+    
+    for batch_idx in range(num_batches):
+        # Calculate responses for this batch
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, num_responses)
+        current_batch_size = end_idx - start_idx
+        
+        print(f"Generating batch {batch_idx + 1}/{num_batches} with {current_batch_size} responses for entry {entry.get('id', 'unknown')}")
         
         try:
-            response = generator.generate_response(
-                prompt=prompt,
-                image_path=image_path,
+            # Generate batch of responses
+            batch_responses = generator.generate_batch_responses(
+                prompts=[prompt] * current_batch_size,
+                image_paths=[image_path] * current_batch_size,
                 temperature=temperature,
                 do_sample=True
             )
             
-            if response:
-                responses.append({
-                    "prompt": prompt,
-                    "response": response,
-                    "temperature": temperature,
-                    "response_id": i
-                })
-            else:
-                print(f"Failed to generate response {i+1} for entry {entry.get('id', 'unknown')}")
-                
+            # Process each response in the batch
+            for i, response in enumerate(batch_responses):
+                if response:
+                    responses.append({
+                        "prompt": prompt,
+                        "response": response,
+                        "temperature": temperature,
+                        "response_id": start_idx + i
+                    })
+                else:
+                    print(f"Failed to generate response {start_idx + i + 1} for entry {entry.get('id', 'unknown')}")
+                    
         except Exception as e:
-            print(f"Error generating response {i+1} for entry {entry.get('id', 'unknown')}: {e}")
+            print(f"Error generating batch {batch_idx + 1} for entry {entry.get('id', 'unknown')}: {e}")
+            # Fallback to single generation for this batch
+            print(f"Falling back to single response generation for batch {batch_idx + 1}")
+            for i in range(current_batch_size):
+                try:
+                    response = generator.generate_response(
+                        prompt=prompt,
+                        image_path=image_path,
+                        temperature=temperature,
+                        do_sample=True
+                    )
+                    
+                    if response:
+                        responses.append({
+                            "prompt": prompt,
+                            "response": response,
+                            "temperature": temperature,
+                            "response_id": start_idx + i
+                        })
+                    else:
+                        print(f"Failed to generate response {start_idx + i + 1} for entry {entry.get('id', 'unknown')}")
+                        
+                except Exception as single_e:
+                    print(f"Error generating single response {start_idx + i + 1} for entry {entry.get('id', 'unknown')}: {single_e}")
     
     return {
         "entry": entry,
@@ -364,19 +400,39 @@ def convert_to_llamafactory_dpo_format(
     """
     llamafactory_data = []
     
+    # Statistics tracking
+    stats = {
+        'total_entries': len(data_with_responses),
+        'skip': 0,
+        'successful_pairs': 0,
+        'no_chosen': 0,
+        'no_rejected': 0,
+        'both_missing': 0
+    }
+    
     for item in data_with_responses:
         entry = item["entry"]
         responses = item["responses"]
         
-        if len(responses) < 2:
-            print(f"Skipping entry {entry.get('id', 'unknown')} - insufficient responses")
-            continue
         
         # Select chosen and rejected responses
         chosen_text, rejected_text = select_chosen_and_rejected(responses, entry["label"])
         
-        if not chosen_text or not rejected_text:
-            print(f"Skipping entry {entry.get('id', 'unknown')} - could not select chosen/rejected")
+        # Track different failure cases
+        if not chosen_text and not rejected_text:
+            print(f"Skipping entry {entry.get('id', 'unknown')} - both chosen and rejected are missing")
+            stats['both_missing'] += 1
+            stats['skip'] += 1
+            continue
+        elif not chosen_text:
+            print(f"Skipping entry {entry.get('id', 'unknown')} - no chosen response available")
+            stats['no_chosen'] += 1
+            stats['skip'] += 1
+            continue
+        elif not rejected_text:
+            print(f"Skipping entry {entry.get('id', 'unknown')} - no rejected response available")
+            stats['no_rejected'] += 1
+            stats['skip'] += 1
             continue
         
         # Use the first response's prompt (they should all be the same now)
@@ -412,8 +468,9 @@ def convert_to_llamafactory_dpo_format(
             llamafactory_entry["images"] = [image_path]
         
         llamafactory_data.append(llamafactory_entry)
+        stats['successful_pairs'] += 1
     
-    return llamafactory_data
+    return llamafactory_data, stats
 
 
 def save_dpo_data(data: List[Dict[str, Any]], output_path: str):
@@ -487,6 +544,12 @@ def main():
         help="Temperature for sampling"
     )
     parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=8,
+        help="Number of responses to generate in each batch (default: 8)"
+    )
+    parser.add_argument(
         "--max_entries",
         type=int,
         default=None,
@@ -524,6 +587,7 @@ def main():
     print(f"Image base path: {args.image_base_path}")
     print(f"Number of responses per entry: {args.num_responses}")
     print(f"Temperature: {args.temperature}")
+    print(f"Batch size: {args.batch_size}")
     print("=" * 60)
     
     # Load input data
@@ -565,7 +629,8 @@ def main():
                 prompt=prompt,
                 image_base_path=args.image_base_path,
                 num_responses=args.num_responses,
-                temperature=args.temperature
+                temperature=args.temperature,
+                batch_size=args.batch_size
             )
             
             if result["responses"]:
@@ -581,10 +646,24 @@ def main():
     
     # Convert to LLaMA-Factory DPO format
     print("Converting to LLaMA-Factory DPO format...")
-    dpo_data = convert_to_llamafactory_dpo_format(
+    dpo_data, stats = convert_to_llamafactory_dpo_format(
         data_with_responses,
         image_base_path=args.image_base_path
     )
+    
+    # Print detailed statistics
+    print("\n" + "=" * 60)
+    print("DPO DATA GENERATION STATISTICS")
+    print("=" * 60)
+    print(f"Total entries processed: {stats['total_entries']}")
+    print(f"Insufficient responses (< 2): {stats['insufficient_responses']}")
+    print(f"Missing chosen responses: {stats['no_chosen']}")
+    print(f"Missing rejected responses: {stats['no_rejected']}")
+    print(f"Missing both chosen & rejected: {stats['both_missing']}")
+    print(f"Total failed chosen/rejected pairs: {stats['skip']}")
+    print(f"Successful DPO pairs created: {stats['successful_pairs']}")
+    print(f"Success rate: {stats['successful_pairs']/stats['total_entries']*100:.1f}%" if stats['total_entries'] > 0 else "Success rate: 0.0%")
+    print("=" * 60)
     
     # Save DPO data
     print("Saving DPO data...")
