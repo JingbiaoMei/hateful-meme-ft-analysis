@@ -195,7 +195,7 @@ def generate_responses_for_entry(
                 temperature=temperature,
                 do_sample=True
             )
-            
+            print(batch_responses)
             # Process each response in the batch
             for i, response in enumerate(batch_responses):
                 if response:
@@ -438,10 +438,8 @@ def convert_to_llamafactory_dpo_format(
         # Use the first response's prompt (they should all be the same now)
         prompt_text = responses[0]["prompt"]
         
-
-        
         # Construct the conversation
-        user_content = f"<image>{prompt_text}"
+        user_content = f"{prompt_text}"
         
         # Create LLaMA-Factory format entry
         llamafactory_entry = {
@@ -656,7 +654,6 @@ def main():
     print("DPO DATA GENERATION STATISTICS")
     print("=" * 60)
     print(f"Total entries processed: {stats['total_entries']}")
-    print(f"Insufficient responses (< 2): {stats['insufficient_responses']}")
     print(f"Missing chosen responses: {stats['no_chosen']}")
     print(f"Missing rejected responses: {stats['no_rejected']}")
     print(f"Missing both chosen & rejected: {stats['both_missing']}")

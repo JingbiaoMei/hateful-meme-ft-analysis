@@ -303,23 +303,11 @@ class HuggingFaceResponseGenerator:
         """
         batch_size = len(prompts)
         responses = []
-        
         try:
-            # Load images if paths provided
-            if images is None and image_paths is not None:
-                images = []
-                for image_path in image_paths:
-                    if image_path is not None:
-                        image = self.load_image(image_path)
-                        images.append(image)
-                    else:
-                        images.append(None)
-            elif images is None:
-                images = [None] * batch_size
             
             # Generate based on model type
             if self.model_type == "qwen2.5-vl":
-                responses = self._generate_batch_qwen2_5_vl(prompts, images, **generation_kwargs)
+                responses = self._generate_batch_qwen2_5_vl(prompts, image_paths, **generation_kwargs)
             else:
                 # Fallback to individual generation for non-Qwen models
                 for i, (prompt, image) in enumerate(zip(prompts, images)):
@@ -346,57 +334,35 @@ class HuggingFaceResponseGenerator:
         """Generate batch responses using Qwen2.5-VL model."""
         # For now, let's use a simpler approach that mimics the single generation
         # but processes multiple at once when possible
-        
-        batch_text_inputs = []
-        batch_image_inputs = []
-        batch_video_inputs = []
-        
+
+        batch_messages = []
+
         # Prepare each message individually but collect for batch processing
         for prompt, image in zip(prompts, images):
             # Prepare messages the same way as single generation
-            content = [{"type": "text", "text": prompt}]
-            if image is not None:
-                content.insert(0, {"type": "image", "image": image})
+            content = [{"type": "image", "image": image},
+                       {"type": "text", "text": prompt}]
+
             
             messages = [{"role": "user", "content": content}]
             
-            # Apply chat template
-            text_input = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            batch_text_inputs.append(text_input)
-            
-            # Process vision info for this sample
-            try:
-                image_inputs, video_inputs = process_vision_info(messages)
-                # Handle the case where process_vision_info returns None or empty
-                if image_inputs:
-                    batch_image_inputs.extend(image_inputs)
-                if video_inputs:
-                    batch_video_inputs.extend(video_inputs)
-            except Exception as vision_e:
-                print(f"Warning: Error processing vision info for one sample: {vision_e}")
-                # Continue without this sample's vision data
-                continue
+            batch_messages.append(messages)
         
-        # If we have no valid samples, return empty list
-        if not batch_text_inputs:
-            return [None] * len(prompts)
-        
-        # Process batch inputs
-        try:
-            inputs = self.processor(
-                text=batch_text_inputs,
-                images=batch_image_inputs if batch_image_inputs else None,
-                videos=batch_video_inputs if batch_video_inputs else None,
-                padding=True,
-                return_tensors="pt",
-            )
-        except Exception as e:
-            print(f"Error in processor batch processing: {e}")
-            raise e
-        
+        texts = [
+            self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True)
+            for msg in batch_messages
+        ]
+        image_inputs, video_inputs = process_vision_info(batch_messages)
         # Move to device
+        
+        inputs = self.processor(
+            text=texts,
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+        
         inputs = inputs.to(self.device)
         
         # Set generation parameters
@@ -422,133 +388,6 @@ class HuggingFaceResponseGenerator:
         # Ensure we return the correct number of responses
         result = [response if response else None for response in responses]
         
-        # Pad with None if we have fewer responses than expected
-        while len(result) < len(prompts):
-            result.append(None)
-            
-        return result[:len(prompts)]  # Truncate if we somehow have too many
+        return result
 
 
-def generate_dpo_responses(data_entries: List[Dict[str, Any]], 
-                          generator: HuggingFaceResponseGenerator,
-                          prompts: List[str],
-                          image_base_path: str = None,
-                          num_responses_per_prompt: int = 2) -> List[Dict[str, Any]]:
-    """
-    Generate multiple responses for DPO dataset creation.
-    
-    Args:
-        data_entries: List of data entries containing image and text information
-        generator: HuggingFaceResponseGenerator instance
-        prompts: List of different prompts to generate responses with
-        image_base_path: Base path for images (optional)
-        num_responses_per_prompt: Number of responses to generate per prompt
-        
-    Returns:
-        List of entries with generated responses
-    """
-    results = []
-    
-    for entry in data_entries:
-        entry_results = {
-            "id": entry.get("id"),
-            "text": entry.get("text", ""),
-            "label": entry.get("label"),
-            "responses": {}
-        }
-        
-        # Get image path
-        image_path = None
-        if image_base_path and "image" in entry:
-            image_path = os.path.join(image_base_path, entry["image"])
-        elif "image_path" in entry:
-            image_path = entry["image_path"]
-        
-        # Generate responses for each prompt
-        for prompt_idx, prompt in enumerate(prompts):
-            prompt_key = f"prompt_{prompt_idx}"
-            entry_results["responses"][prompt_key] = {
-                "prompt": prompt,
-                "generated_responses": []
-            }
-            
-            # Generate multiple responses for diversity
-            for response_idx in range(num_responses_per_prompt):
-                print(f"Generating response {response_idx + 1}/{num_responses_per_prompt} for entry {entry.get('id')} with prompt {prompt_idx + 1}")
-                
-                response = generator.generate_response(
-                    prompt=prompt,
-                    image_path=image_path
-                )
-                
-                if response:
-                    entry_results["responses"][prompt_key]["generated_responses"].append({
-                        "response_id": response_idx,
-                        "text": response
-                    })
-                else:
-                    print(f"Failed to generate response {response_idx + 1} for entry {entry.get('id')}")
-        
-        results.append(entry_results)
-    
-    return results
-
-
-def save_dpo_responses(responses: List[Dict[str, Any]], output_path: str):
-    """Save DPO responses to a JSON file."""
-    try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(responses, f, indent=2, ensure_ascii=False)
-        print(f"DPO responses saved to: {output_path}")
-    except Exception as e:
-        print(f"Error saving DPO responses: {e}")
-
-
-# Example usage function
-def example_usage():
-    """Example of how to use the HuggingFaceResponseGenerator for DPO dataset generation."""
-    
-    # Initialize generator
-    generator = HuggingFaceResponseGenerator(
-        model_name="Qwen/Qwen2.5-VL-7B-Instruct",
-        device="auto",
-        torch_dtype=torch.bfloat16,
-        max_new_tokens=512,
-        temperature=0.7
-    )
-    
-    # Example prompts for hateful meme classification
-    prompts = [
-        "Analyze this meme and determine if it contains hateful content. Explain your reasoning.",
-        "Is this meme hateful or not? Provide a detailed analysis.",
-        "Classify this meme as hateful or non-hateful and justify your decision."
-    ]
-    
-    # Example data entries
-    data_entries = [
-        {
-            "id": "example_1",
-            "text": "Example meme text",
-            "label": 1,
-            "image": "example_image.jpg"
-        }
-    ]
-    
-    # Generate responses
-    responses = generate_dpo_responses(
-        data_entries=data_entries,
-        generator=generator,
-        prompts=prompts,
-        image_base_path="./images/",
-        num_responses_per_prompt=3
-    )
-    
-    # Save responses
-    save_dpo_responses(responses, "./dpo_responses.json")
-    
-    return responses
-
-
-if __name__ == "__main__":
-    # Run example
-    example_usage()

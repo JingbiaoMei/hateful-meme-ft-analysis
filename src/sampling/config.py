@@ -11,6 +11,6 @@ import torch
 # =============================================================================
 
 # Original prompt for structured analysis
-prompt = """Output the thinking process in <think> </think> and final answer in <answer> </answer> tags. The answer should be Yes or No, if the meme is hateful than output Yes ; if the meme is Benign than output No. The output format should be as follows:
+prompt = """<image>Is it hateful? Output the thinking process in <think> </think> and final answer in <answer> </answer> tags. The answer should be Yes or No, if the meme is hateful than output Yes ; if the meme is Benign than output No. The output format should be as follows:
 <think> ... </think> <answer>...</answer>
 Please strictly follow the format."""
