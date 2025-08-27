@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import torch
+import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
@@ -68,8 +69,6 @@ def load_input_data(input_path: str) -> List[Dict[str, Any]]:
     print(f"Loaded {len(data)} entries from {input_path}")
     return data
 
-
-
 def standardize_entry_format(entry: Dict[str, Any], line_num: int) -> Optional[Dict[str, Any]]:
     """
     Standardize different dataset formats to a common format.
@@ -81,71 +80,64 @@ def standardize_entry_format(entry: Dict[str, Any], line_num: int) -> Optional[D
     Returns:
         Standardized entry or None if invalid
     """
-    try:
-        # Required fields
-        if "id" not in entry:
-            print(f"Warning: Missing 'id' field on line {line_num}")
-            return None
-        
-        if "text" not in entry:
-            print(f"Warning: Missing 'text' field on line {line_num}")
-            return None
-        
-        # Handle different image field names
-        image_path = None
-        if "img" in entry:
-            image_path = entry["img"]  # FB, MAMI, PrideMM format
-        elif "image" in entry:
-            image_path = entry["image"]  # HarMeme format or custom format
-        else:
-            print(f"Warning: Missing image field ('img' or 'image') on line {line_num}")
-            return None
-        
-        # Handle different label formats
-        label = None
-        if "label" in entry:
-            # Simple binary label (FB, MAMI, PrideMM, custom)
-            label = entry["label"]
-            if not isinstance(label, int) or label not in [0, 1]:
-                print(f"Warning: Invalid label '{label}' on line {line_num}, should be 0 or 1")
-                return None
-        elif "labels" in entry:
-            # HarMeme format with multiple labels
-            labels = entry["labels"]
-            if isinstance(labels, list) and len(labels) > 0:
-                # Convert HarMeme labels to binary
-                # "not harmful" -> 0, anything else -> 1
-                if "not harmful" in labels:
-                    label = 0
-                else:
-                    label = 1
-            else:
-                print(f"Warning: Invalid labels format on line {line_num}")
-                return None
-        else:
-            print(f"Warning: Missing label field on line {line_num}")
-            return None
-        
-        # Create standardized entry
-        standardized_entry = {
-            "id": str(entry["id"]),
-            "image": image_path,
-            "text": entry["text"],
-            "label": label
-        }
-        
-        # Add original labels for reference if they exist
-        if "labels" in entry:
-            standardized_entry["original_labels"] = entry["labels"]
-        
-        return standardized_entry
-        
-    except Exception as e:
-        print(f"Error processing entry on line {line_num}: {e}")
+
+    # Required fields
+    if "id" not in entry:
+        print(f"Warning: Missing 'id' field on line {line_num}")
         return None
-
-
-
+    
+    if "text" not in entry:
+        print(f"Warning: Missing 'text' field on line {line_num}")
+        return None
+    
+    # Handle different image field names
+    image_path = None
+    if "img" in entry:
+        image_path = entry["img"].replace("img/", "")  # FB, MAMI, PrideMM format
+    elif "image" in entry:
+        image_path = entry["image"].replace("img/", "")  # HarMeme format format
+    else:
+        print(f"Warning: Missing image field ('img' or 'image') on line {line_num}")
+        return None
+    
+    # Handle different label formats
+    label = None
+    if "label" in entry:
+        # Simple binary label (FB, MAMI, PrideMM)
+        label = entry["label"]
+        if not isinstance(label, int) or label not in [0, 1]:
+            print(f"Warning: Invalid label '{label}' on line {line_num}, should be 0 or 1")
+            return None
+    elif "labels" in entry:
+        # HarMeme format with multiple labels
+        labels = entry["labels"]
+        if isinstance(labels, list) and len(labels) > 0:
+            # Convert HarMeme labels to binary
+            # "not harmful" -> 0, anything else -> 1
+            if "not harmful" in labels:
+                label = 0
+            else:
+                label = 1
+        else:
+            print(f"Warning: Invalid labels format on line {line_num}")
+            return None
+    else:
+        print(f"Warning: Missing label field on line {line_num}")
+        return None
+    
+    # Create standardized entry
+    standardized_entry = {
+        "id": str(entry["id"]),
+        "image": image_path,
+        "text": entry["text"],
+        "label": label
+    }
+    
+    # Add original labels for reference if they exist
+    if "labels" in entry:
+        standardized_entry["original_labels"] = entry["labels"]
+    
+    return standardized_entry
 
 def generate_responses_for_entry(
     entry: Dict[str, Any],
@@ -212,13 +204,78 @@ def generate_responses_for_entry(
     }
 
 
+def format_reward(predict_str: str) -> float:
+    """
+    Check if the response follows the correct format with <think> and <answer> tags.
+    
+    Args:
+        predict_str: The generated response string
+        
+    Returns:
+        1.0 if format is correct, 0.0 otherwise
+    """
+    pattern = re.compile(r"<think>.*?</think>\s*<answer>.*?</answer>", re.DOTALL)
+    match_result = re.fullmatch(pattern, predict_str)
+    return 1.0 if match_result else 0.0
+
+
+def acc_reward(predict_str: str, ground_truth: str) -> float:
+    """
+    Custom accuracy reward function based on exact match with answer tags.
+    Expects answers to be either "yes" or "no" and uses <answer> tags for extraction.
+    
+    Args:
+        predict_str: The generated response string
+        ground_truth: The ground truth label as string ("yes" for label=1, "no" for label=0)
+        
+    Returns:
+        1.0 if prediction is correct, 0.0 otherwise
+    """
+    try:
+        # Convert to lowercase for comparison
+        predict_str_lower = predict_str.lower()
+        ground_truth_lower = ground_truth.lower()
+        
+        # Pattern for extracting content from <answer> tags
+        answer_tag_pattern = r'<answer>(.*?)</answer>'
+        
+        # Extract answer from ground truth if it has answer tags
+        sol_match = re.search(answer_tag_pattern, ground_truth_lower, re.DOTALL)
+        extracted_ground_truth = sol_match.group(1).strip() if sol_match else ground_truth_lower.strip()
+        
+        # Extract answer from prediction if it has answer tags
+        content_match = re.search(answer_tag_pattern, predict_str_lower, re.DOTALL)
+        student_answer = content_match.group(1).strip() if content_match else predict_str_lower.strip()
+        
+        # Normalize by removing spaces and underscores
+        extracted_ground_truth = extracted_ground_truth.replace(' ', '').replace('_', '')
+        student_answer = student_answer.replace(' ', '').replace('_', '')
+        
+        # Check if student answer is empty
+        if student_answer == "" or student_answer == " ":
+            return 0.0
+            
+        # Check if answer is valid (only "yes" or "no" allowed)
+        if not (student_answer == "yes" or student_answer == "no"):
+            return 0.0
+            
+        # Compare the extracted answers (bidirectional containment check)
+        if extracted_ground_truth in student_answer or student_answer in extracted_ground_truth:
+            return 1.0
+            
+        return 0.0
+        
+    except Exception:
+        return 0.0
+
+
 def select_chosen_and_rejected(responses: List[Dict[str, Any]], label: int) -> tuple:
     """
-    Select chosen and rejected responses based on label and response quality.
+    Select chosen and rejected responses based on format correctness and answer accuracy.
     
     For DPO training:
-    - chosen: Response that better aligns with the ground truth label
-    - rejected: Response that contradicts or poorly explains the label
+    - chosen: Response that has correct format AND correct prediction (label=1 -> "yes", label=0 -> "no")
+    - rejected: Response that has incorrect format OR incorrect prediction
     
     Args:
         responses: List of generated responses
@@ -230,61 +287,48 @@ def select_chosen_and_rejected(responses: List[Dict[str, Any]], label: int) -> t
     if len(responses) < 2:
         return None, None
     
-    # Keywords for harmful content (broader than just "hateful")
-    harmful_keywords = [
-        "harmful", "hateful", "hate", "offensive", "discriminatory", "inappropriate", 
-        "toxic", "hurtful", "problematic", "concerning", "dangerous", "negative",
-        "attacking", "targeting", "stereotyping", "harassment", "threatening"
-    ]
-    
-    # Keywords for non-harmful content
-    safe_keywords = [
-        "not harmful", "not hateful", "not offensive", "harmless", "acceptable", 
-        "appropriate", "safe", "benign", "neutral", "positive", "wholesome",
-        "inoffensive", "non-threatening", "respectful"
-    ]
-    
-    target_keywords = harmful_keywords if label == 1 else safe_keywords
-    opposite_keywords = safe_keywords if label == 1 else harmful_keywords
+    # Convert label to expected answer
+    ground_truth = "yes" if label == 1 else "no"
     
     scored_responses = []
     for resp in responses:
-        response_text = resp["response"].lower()
+        response_text = resp["response"]
         
-        # Score based on keyword alignment
-        target_score = sum(1 for kw in target_keywords if kw in response_text)
-        opposite_score = sum(1 for kw in opposite_keywords if kw in response_text)
+        # Calculate format reward (1.0 if correct format, 0.0 otherwise)
+        format_score = format_reward(response_text)
         
-        # Bonus for explicit classification statements
-        if label == 1:
-            if any(phrase in response_text for phrase in ["is harmful", "is hateful", "contains harmful", "contains hateful"]):
-                target_score += 2
-        else:
-            if any(phrase in response_text for phrase in ["is not harmful", "is not hateful", "not harmful", "not hateful"]):
-                target_score += 2
+        # Calculate accuracy reward (1.0 if correct answer, 0.0 otherwise)
+        accuracy_score = acc_reward(response_text, ground_truth)
         
-        # Prefer responses that are longer and more detailed (but not too long)
-        length = len(resp["response"])
-        if 100 <= length <= 800:  # Sweet spot for detailed but concise responses
-            length_score = 1
-        elif length > 800:
-            length_score = 0.5  # Penalize very long responses
-        else:
-            length_score = 0.2  # Penalize very short responses
+        # Combined score: only responses with both correct format AND correct answer get high score
+        # This ensures chosen responses meet both criteria
+        combined_score = format_score * accuracy_score
         
-        # Bonus for providing reasoning/explanation
-        reasoning_indicators = ["because", "due to", "reason", "analysis", "evidence", "example"]
-        reasoning_score = sum(0.5 for indicator in reasoning_indicators if indicator in response_text)
-        
-        final_score = target_score - opposite_score + length_score + reasoning_score
-        scored_responses.append((final_score, resp))
+        scored_responses.append((combined_score, resp))
     
     # Sort by score (highest first)
     scored_responses.sort(key=lambda x: x[0], reverse=True)
     
-    # Select best and worst as chosen/rejected
-    chosen = scored_responses[0][1]["response"]
-    rejected = scored_responses[-1][1]["response"]
+    # Find chosen (highest scoring response with both format and accuracy = 1.0)
+    chosen = None
+    rejected = None
+    
+    # Look for a response with perfect score (both format and accuracy correct)
+    for score, resp in scored_responses:
+        if score == 1.0:  # Perfect format and accuracy
+            chosen = resp["response"]
+            break
+    
+    # Find rejected (lowest scoring response, preferably with score < 1.0)
+    for score, resp in reversed(scored_responses):
+        if score < 1.0:  # Imperfect format or accuracy
+            rejected = resp["response"]
+            break
+    
+    # Ensure chosen and rejected are different
+    if chosen == rejected and len(scored_responses) > 1:
+        chosen = None
+        rejected = None
     
     return chosen, rejected
 
@@ -338,9 +382,7 @@ def convert_to_llamafactory_dpo_format(
         # Use the first response's prompt (they should all be the same now)
         prompt_text = responses[0]["prompt"]
         
-        # Add meme text to prompt if available
-        if entry.get("text"):
-            prompt_text = f"{prompt_text}\n\nMeme text: \"{entry['text']}\""
+
         
         # Construct the conversation
         user_content = f"<image>{prompt_text}"
@@ -366,7 +408,7 @@ def convert_to_llamafactory_dpo_format(
         # Add image path
         if entry.get("image"):
             # Use relative path for LLaMA-Factory
-            image_path = entry["image"]
+            image_path = os.path.join(image_base_path, entry["image"])
             llamafactory_entry["images"] = [image_path]
         
         llamafactory_data.append(llamafactory_entry)
