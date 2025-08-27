@@ -5,6 +5,5 @@ python src/sampling/generate_dpo_data.py \
     --max_entries 10 \
     --num_responses 3 \
     --model_name Qwen/Qwen2.5-VL-7B-Instruct \
-    --temperature_min 0.5 \
-    --temperature_max 0.8 \
+    --temperature 0.7 \
     --max_new_tokens 150

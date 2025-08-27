@@ -42,46 +42,32 @@ def load_input_data(input_path: str) -> List[Dict[str, Any]]:
     
     4. PrideMM format (JSONL, same as FB):
        {"id": "img_1", "img": "img/img_1.png", "label": 0, "text": "transgirls who grow boobs..."}
-    
-    5. Custom JSON format:
-       [{"id": "unique_id", "image": "path/to/image.jpg", "text": "content", "label": 0}, ...]
     """
-    try:
-        data = []
-        
-        # Determine file format by extension
-        if input_path.endswith('.jsonl'):
-            # Load JSONL format
-            with open(input_path, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.strip()
-                    if line:
-                        try:
-                            entry = json.loads(line)
-                            standardized_entry = standardize_entry_format(entry, line_num)
-                            if standardized_entry:
-                                data.append(standardized_entry)
-                        except json.JSONDecodeError as e:
-                            print(f"Warning: Invalid JSON on line {line_num}: {e}")
-                            continue
-        else:
-            # Load JSON format
-            with open(input_path, 'r', encoding='utf-8') as f:
-                json_data = json.load(f)
-                if isinstance(json_data, list):
-                    for i, entry in enumerate(json_data):
-                        standardized_entry = standardize_entry_format(entry, i+1)
-                        if standardized_entry:
-                            data.append(standardized_entry)
-                else:
-                    print(f"Error: JSON file should contain an array of entries")
-                    return []
-        
-        print(f"Loaded {len(data)} entries from {input_path}")
-        return data
-    except Exception as e:
-        print(f"Error loading input data from {input_path}: {e}")
-        sys.exit(1)
+    data = []
+    
+    # Determine file format by extension
+    if input_path.endswith('.jsonl'):
+        # Load JSONL format
+        with open(input_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                entry = json.loads(line)
+                standardized_entry = standardize_entry_format(entry, line_num)
+
+                data.append(standardized_entry)
+
+    else:
+        # Load JSON format
+        with open(input_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+            for i, entry in enumerate(json_data):
+                standardized_entry = standardize_entry_format(entry, i+1)
+
+                data.append(standardized_entry)
+
+    print(f"Loaded {len(data)} entries from {input_path}")
+    return data
+
 
 
 def standardize_entry_format(entry: Dict[str, Any], line_num: int) -> Optional[Dict[str, Any]]:
@@ -164,10 +150,10 @@ def standardize_entry_format(entry: Dict[str, Any], line_num: int) -> Optional[D
 def generate_responses_for_entry(
     entry: Dict[str, Any],
     generator: HuggingFaceResponseGenerator,
-    prompts: str,
+    prompt: str,
     image_base_path: Optional[str],
     num_responses: int,
-    temperature_range: tuple = (0.3, 1.0)
+    temperature: float = 0.7
 ) -> Dict[str, Any]:
     """
     Generate multiple responses for a single data entry.
@@ -175,10 +161,10 @@ def generate_responses_for_entry(
     Args:
         entry: Data entry with id, image, text, label
         generator: HuggingFaceResponseGenerator instance
-        prompt: Prompt to use for response generation
+        prompt: Single prompt to use for response generation
         image_base_path: Base path for images
         num_responses: Number of responses to generate
-        temperature_range: Range of temperatures to sample from
+        temperature: Fixed temperature to use for sampling
         
     Returns:
         Dictionary with original entry data and generated responses
@@ -194,17 +180,9 @@ def generate_responses_for_entry(
         print(f"Warning: Image not found: {image_path}")
         image_path = None
     
-    # Generate responses with different prompts and temperatures
     responses = []
     
     for i in range(num_responses):
-        # Select prompt (cycle through available prompts)
-        prompt = prompts[i % len(prompts)]
-        
-        # Sample temperature from range
-        import random
-        temperature = random.uniform(temperature_range[0], temperature_range[1])
-        
         print(f"Generating response {i+1}/{num_responses} for entry {entry.get('id', 'unknown')} (temp={temperature:.2f})")
         
         try:
@@ -357,15 +335,15 @@ def convert_to_llamafactory_dpo_format(
             print(f"Skipping entry {entry.get('id', 'unknown')} - could not select chosen/rejected")
             continue
         
-        # Use the first response's prompt (they should be similar)
-        prompt = responses[0]["prompt"]
+        # Use the first response's prompt (they should all be the same now)
+        prompt_text = responses[0]["prompt"]
         
         # Add meme text to prompt if available
         if entry.get("text"):
-            prompt = f"{prompt}\n\nMeme text: \"{entry['text']}\""
+            prompt_text = f"{prompt_text}\n\nMeme text: \"{entry['text']}\""
         
         # Construct the conversation
-        user_content = f"<image>{prompt}"
+        user_content = f"<image>{prompt_text}"
         
         # Create LLaMA-Factory format entry
         llamafactory_entry = {
@@ -461,16 +439,10 @@ def main():
         help="Maximum number of new tokens to generate"
     )
     parser.add_argument(
-        "--temperature_min",
+        "--temperature",
         type=float,
         default=0.7,
-        help="Minimum temperature for sampling"
-    )
-    parser.add_argument(
-        "--temperature_max",
-        type=float,
-        default=1.0,
-        help="Maximum temperature for sampling"
+        help="Temperature for sampling"
     )
     parser.add_argument(
         "--max_entries",
@@ -509,7 +481,7 @@ def main():
     print(f"Output file: {args.output_file}")
     print(f"Image base path: {args.image_base_path}")
     print(f"Number of responses per entry: {args.num_responses}")
-    print(f"Temperature range: {args.temperature_min} - {args.temperature_max}")
+    print(f"Temperature: {args.temperature}")
     print("=" * 60)
     
     # Load input data
@@ -535,9 +507,6 @@ def main():
         max_new_tokens=args.max_new_tokens,
         **model_kwargs
     )
-    
-    # Get classification prompts
-    prompts = get_classification_prompts()
 
     
     # Generate responses for each entry
@@ -551,10 +520,10 @@ def main():
             result = generate_responses_for_entry(
                 entry=entry,
                 generator=generator,
-                prompts=prompts,
+                prompt=prompt,
                 image_base_path=args.image_base_path,
                 num_responses=args.num_responses,
-                temperature_range=(args.temperature_min, args.temperature_max)
+                temperature=args.temperature
             )
             
             if result["responses"]:
