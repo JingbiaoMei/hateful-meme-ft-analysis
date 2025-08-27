@@ -446,20 +446,6 @@ def main():
         default="Qwen/Qwen2.5-VL-7B-Instruct",
         help="Hugging Face model name for response generation"
     )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        choices=["auto", "cuda", "cpu"],
-        help="Device to run the model on"
-    )
-    parser.add_argument(
-        "--torch_dtype",
-        type=str,
-        default="bfloat16",
-        choices=["float16", "bfloat16", "float32"],
-        help="Torch data type for model"
-    )
     
     # Data arguments
     parser.add_argument(
@@ -485,7 +471,7 @@ def main():
     parser.add_argument(
         "--num_responses",
         type=int,
-        default=3,
+        default=5,
         help="Number of responses to generate per entry"
     )
     parser.add_argument(
@@ -497,7 +483,7 @@ def main():
     parser.add_argument(
         "--temperature_min",
         type=float,
-        default=0.3,
+        default=0.7,
         help="Minimum temperature for sampling"
     )
     parser.add_argument(
@@ -534,13 +520,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Convert torch_dtype string to actual dtype
-    dtype_map = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32
-    }
-    torch_dtype = dtype_map[args.torch_dtype]
     
     print("=" * 60)
     print("DPO Data Generation for Hateful Meme Classification")
@@ -573,8 +552,6 @@ def main():
     
     generator = HuggingFaceResponseGenerator(
         model_name=args.model_name,
-        device=args.device,
-        torch_dtype=torch_dtype,
         max_new_tokens=args.max_new_tokens,
         **model_kwargs
     )
