@@ -6,10 +6,17 @@ This script uses vLLM's offline inference engine to create preference data suita
 The vLLM approach batches all requests together to maximize throughput and speed compared to 
 the HuggingFace sequential generation approach.
 
+Features:
+- Generates multiple responses per sample using vLLM batch processing
+- Creates DPO pairs (chosen/rejected) based on format correctness and answer accuracy
+- Saves final DPO data in LLaMA-Factory format
+- Optionally logs all generation entries for each sample with detailed scoring
+
 Usage:
     python generate_dpo_data_vllm.py --model_name "Qwen/Qwen2.5-VL-7B-Instruct" \
                                      --input_data data/hateful_memes.json \
                                      --output_file dpo_hateful_memes.json \
+                                     --generation_log_file generation_log.json \
                                      --image_base_path ./images/ \
                                      --num_responses 5
 """
@@ -670,7 +677,7 @@ def convert_to_llamafactory_dpo_format(
             ],
             "chosen": {
                 "content": chosen_text,
-                "role": "assistant"proce
+                "role": "assistant"
             },
             "rejected": {
                 "content": rejected_text,
@@ -707,6 +714,116 @@ def save_dpo_data(data: List[Dict[str, Any]], output_path: str):
         sys.exit(1)
 
 
+def save_generation_log(data_with_responses: List[Dict[str, Any]], output_path: str):
+    """
+    Save all generation entries for each sample to a log file.
+    
+    This creates a comprehensive log that includes:
+    - Original entry data (id, text, label, image path)
+    - All generated responses with metadata
+    - Response quality scores (format and accuracy)
+    
+    Args:
+        data_with_responses: List of results with entry data and generated responses
+        output_path: Path to save the generation log file
+    """
+    try:
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        generation_log = []
+        
+        for item in data_with_responses:
+            entry = item["entry"]
+            responses = item["responses"]
+            
+            # Convert label to expected answer for scoring
+            ground_truth = "yes" if entry["label"] == 1 else "no"
+            
+            # Score each response
+            scored_responses = []
+            for resp in responses:
+                response_text = resp["response"]
+                
+                # Calculate format reward (1.0 if correct format, 0.0 otherwise)
+                format_score = format_reward(response_text)
+                
+                # Calculate accuracy reward (1.0 if correct answer, 0.0 otherwise)
+                accuracy_score = acc_reward(response_text, ground_truth)
+                
+                # Combined score
+                combined_score = format_score * accuracy_score
+                
+                scored_responses.append({
+                    "response_id": resp.get("response_id", "unknown"),
+                    "prompt": resp["prompt"],
+                    "response": response_text,
+                    "temperature": resp.get("temperature", "unknown"),
+                    "format_score": format_score,
+                    "accuracy_score": accuracy_score,
+                    "combined_score": combined_score
+                })
+            
+            # Sort responses by combined score (highest first)
+            scored_responses.sort(key=lambda x: x["combined_score"], reverse=True)
+            
+            # Select chosen and rejected for reference
+            chosen_text, rejected_text = select_chosen_and_rejected(responses, entry["label"])
+            
+            # Create log entry
+            log_entry = {
+                "entry_id": entry.get("id", "unknown"),
+                "original_entry": {
+                    "id": entry.get("id"),
+                    "text": entry.get("text"),
+                    "label": entry.get("label"),
+                    "image": entry.get("image"),
+                    "original_labels": entry.get("original_labels")
+                },
+                "ground_truth_answer": ground_truth,
+                "total_responses": len(scored_responses),
+                "responses": scored_responses,
+                "dpo_selection": {
+                    "chosen": chosen_text,
+                    "rejected": rejected_text,
+                    "has_valid_pair": chosen_text is not None and rejected_text is not None
+                },
+                "statistics": {
+                    "perfect_responses": sum(1 for r in scored_responses if r["combined_score"] == 1.0),
+                    "format_correct": sum(1 for r in scored_responses if r["format_score"] == 1.0),
+                    "accuracy_correct": sum(1 for r in scored_responses if r["accuracy_score"] == 1.0),
+                    "average_combined_score": sum(r["combined_score"] for r in scored_responses) / len(scored_responses) if scored_responses else 0.0
+                }
+            }
+            
+            generation_log.append(log_entry)
+        
+        # Save the log
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(generation_log, f, indent=2, ensure_ascii=False)
+        
+        print(f"Generation log saved to: {output_path}")
+        print(f"Logged {len(generation_log)} entries with all generation details")
+        
+        # Print summary statistics
+        total_responses = sum(len(entry["responses"]) for entry in generation_log)
+        total_perfect = sum(entry["statistics"]["perfect_responses"] for entry in generation_log)
+        total_format_correct = sum(entry["statistics"]["format_correct"] for entry in generation_log)
+        total_accuracy_correct = sum(entry["statistics"]["accuracy_correct"] for entry in generation_log)
+        valid_pairs = sum(1 for entry in generation_log if entry["dpo_selection"]["has_valid_pair"])
+        
+        print(f"Generation log summary:")
+        print(f"  - Total responses: {total_responses}")
+        print(f"  - Perfect responses (format + accuracy): {total_perfect} ({total_perfect/total_responses*100:.1f}%)")
+        print(f"  - Format correct: {total_format_correct} ({total_format_correct/total_responses*100:.1f}%)")
+        print(f"  - Accuracy correct: {total_accuracy_correct} ({total_accuracy_correct/total_responses*100:.1f}%)")
+        print(f"  - Valid DPO pairs: {valid_pairs} ({valid_pairs/len(generation_log)*100:.1f}%)")
+        
+    except Exception as e:
+        print(f"Error saving generation log: {e}")
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate DPO data for hateful meme classification using vLLM",
@@ -739,6 +856,12 @@ def main():
         type=str,
         required=True,
         help="Path to output JSON file for DPO data"
+    )
+    parser.add_argument(
+        "--generation_log_file",
+        type=str,
+        default=None,
+        help="Path to output JSON file for generation log (optional, saves all generation entries for each sample)"
     )
     parser.add_argument(
         "--image_base_path",
@@ -842,7 +965,7 @@ def main():
     parser.add_argument(
         "--seed",
         type=int,
-        default=22,
+        default=None,
         help="Random seed for generation"
     )
     
@@ -854,6 +977,7 @@ def main():
     print(f"Model: {args.model_name}")
     print(f"Input data: {args.input_data}")
     print(f"Output file: {args.output_file}")
+    print(f"Generation log file: {args.generation_log_file or 'Not specified'}")
     print(f"Image base path: {args.image_base_path}")
     print(f"Number of responses per entry: {args.num_responses}")
     print(f"Temperature: {args.temperature}")
@@ -927,9 +1051,16 @@ def main():
     print("Saving DPO data...")
     save_dpo_data(dpo_data, args.output_file)
     
+    # Save generation log if requested
+    if args.generation_log_file:
+        print("Saving generation log...")
+        save_generation_log(data_with_responses, args.generation_log_file)
+    
     print("\n" + "=" * 60)
     print("vLLM DPO data generation completed successfully!")
-    print(f"Output saved to: {args.output_file}")
+    print(f"DPO data saved to: {args.output_file}")
+    if args.generation_log_file:
+        print(f"Generation log saved to: {args.generation_log_file}")
     print(f"Total DPO examples: {len(dpo_data)}")
     print("=" * 60)
 

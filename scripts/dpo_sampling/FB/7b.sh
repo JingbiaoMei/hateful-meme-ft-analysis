@@ -4,7 +4,7 @@
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate hm-ana
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
 INPUT_DATA="data/gt/FB/train.jsonl"
@@ -17,6 +17,7 @@ python src/sampling/generate_dpo_data_vllm.py \
     --input_data "$INPUT_DATA" \
     --output_file "$OUTPUT_FILE" \
     --image_base_path "$IMAGE_BASE_PATH" \
+    --generation_log_file ./generation_log_7b.json \
     --num_responses $NUM_RESPONSES \
     --max_entries 50 \
     --batch_size 100 \
