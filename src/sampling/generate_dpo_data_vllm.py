@@ -62,7 +62,7 @@ class VLLMResponseGenerator:
                  image_min_pixels: int = 32 * 32,
                  adapter_name_or_path: Optional[str] = None,
                  trust_remote_code: bool = True,
-                 dtype: str = "auto",
+                 dtype: str = "bfloat16",
                  **vllm_kwargs):
         """
         Initialize the vLLM response generator.
@@ -670,7 +670,7 @@ def convert_to_llamafactory_dpo_format(
             ],
             "chosen": {
                 "content": chosen_text,
-                "role": "assistant"
+                "role": "assistant"proce
             },
             "rejected": {
                 "content": rejected_text,
@@ -831,7 +831,7 @@ def main():
     parser.add_argument(
         "--dtype",
         type=str,
-        default="auto",
+        default="bfloat16",
         help="Model data type (auto, float16, bfloat16, etc.)"
     )
     parser.add_argument(
@@ -842,7 +842,7 @@ def main():
     parser.add_argument(
         "--seed",
         type=int,
-        default=None,
+        default=22,
         help="Random seed for generation"
     )
     
