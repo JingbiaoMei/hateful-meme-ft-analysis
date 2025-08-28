@@ -7,9 +7,9 @@ conda activate hm-ana
 export CUDA_VISIBLE_DEVICES=0
 
 MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
-INPUT_DATA="data/gt/MAMI/train.jsonl"
-IMAGE_BASE_PATH="data/image/MAMI/All"
-OUTPUT_FILE="dpo_data/test/test_mami_dpo.jsonl"
+INPUT_DATA="data/gt/FB/train.jsonl"
+IMAGE_BASE_PATH="data/image/FB/All"
+OUTPUT_FILE="dpo_data/FB/FB_qwen25vl7b.jsonl"
 NUM_RESPONSES=8
 # Run the vLLM DPO generation script
 python src/sampling/generate_dpo_data_vllm.py \
