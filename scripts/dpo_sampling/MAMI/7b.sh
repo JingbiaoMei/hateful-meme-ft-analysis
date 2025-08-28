@@ -18,7 +18,7 @@ python src/sampling/generate_dpo_data_vllm.py \
     --image_base_path "$IMAGE_BASE_PATH" \
     --generation_log_file ./generation_log_7b.json \
     --num_responses $NUM_RESPONSES \
-    --batch_size 200 \
+    --batch_size 1000 \
     --temperature 1.0 \
     --top_p 0.9 \
     --top_k 50 \
