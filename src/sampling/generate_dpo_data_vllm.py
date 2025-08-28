@@ -33,6 +33,13 @@ try:
 except ImportError:
     HAS_VLLM = False
 
+# Import transformers for chat template processing
+try:
+    from transformers import AutoTokenizer
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
+
 from config import prompt
 
 
@@ -80,6 +87,9 @@ class VLLMResponseGenerator:
         if not HAS_VLLM:
             raise ImportError("vLLM is required for this script. Please install it with: pip install vllm")
         
+        if not HAS_TRANSFORMERS:
+            raise ImportError("transformers is required for chat template processing. Please install it with: pip install transformers")
+        
         self.model_name = model_name
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
@@ -117,6 +127,13 @@ class VLLMResponseGenerator:
         
         self.llm = LLM(**engine_args)
         
+        # Initialize tokenizer for chat template processing
+        print("Loading tokenizer for chat template processing...")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name, 
+            trust_remote_code=trust_remote_code
+        )
+        
         # Initialize sampling parameters
         self.sampling_params = SamplingParams(
             repetition_penalty=repetition_penalty,
@@ -147,15 +164,53 @@ class VLLMResponseGenerator:
             print(f"Error loading image from {image_path}: {e}")
             return None
     
+    def _prepare_conversation_format(self, prompt_template: str, image: Optional[Image.Image]) -> str:
+        """
+        Prepare conversation format for vLLM with Qwen2.5-VL using chat template.
+        
+        This is the key method that makes multimodal generation work with vLLM.
+        vLLM with Qwen2.5-VL requires the chat template to be applied before generation.
+        """
+        # Remove the <image> token from the prompt template since we'll handle it through messages
+        text_prompt = prompt_template.replace("<image>", "").strip()
+        
+        if image is not None:
+            # Create conversation messages with image and text
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": text_prompt}
+                    ]
+                }
+            ]
+        else:
+            # Text-only conversation
+            messages = [
+                {
+                    "role": "user",
+                    "content": text_prompt
+                }
+            ]
+        
+        # Apply chat template - this is crucial for vLLM multimodal support
+        formatted_prompt = self.tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+        
+        return formatted_prompt
+    
     def _prepare_multimodal_data(self, image: Optional[Image.Image]) -> Optional[Dict[str, Any]]:
         """Prepare multimodal data for vLLM input."""
         if image is None:
             return None
         
-        # For vLLM, we need to prepare the image in the expected format
-        # This is a simplified approach - may need adjustment based on specific model requirements
+        # For vLLM with Qwen2.5-VL, we need to prepare the image in the expected format
         return {
-            "image": [image]  # vLLM expects a list of images
+            "image": image  # vLLM expects a single PIL image for Qwen2.5-VL
         }
     
     def generate_all_responses(self, 
@@ -200,17 +255,24 @@ class VLLMResponseGenerator:
             
             # Create multiple requests for this entry (for different responses)
             for response_idx in range(num_responses):
-                # Prepare the prompt with image token
-                full_prompt = prompt_template
+                # Prepare the conversation format using chat template
+                formatted_prompt = self._prepare_conversation_format(prompt_template, image)
                 
                 # Prepare multimodal data
                 multi_modal_data = self._prepare_multimodal_data(image)
                 
                 # Create vLLM input format
-                vllm_input = {
-                    "prompt": full_prompt,
-                    "multi_modal_data": multi_modal_data
-                }
+                if multi_modal_data is not None:
+                    # For multimodal inputs, use the formatted prompt with multimodal data
+                    vllm_input = {
+                        "prompt": formatted_prompt,
+                        "multi_modal_data": multi_modal_data
+                    }
+                else:
+                    # For text-only inputs, just use the formatted prompt
+                    vllm_input = {
+                        "prompt": formatted_prompt
+                    }
                 
                 all_requests.append(vllm_input)
                 request_metadata.append({
@@ -268,7 +330,7 @@ class VLLMResponseGenerator:
             for resp in all_responses:
                 if resp["entry_idx"] == entry_idx and resp["response"] is not None:
                     entry_responses.append({
-                        "prompt": prompt_template,
+                        "prompt": prompt_template,  # Keep the original prompt with <image> token for consistency
                         "response": resp["response"],
                         "temperature": self.temperature,
                         "response_id": resp["response_idx"]

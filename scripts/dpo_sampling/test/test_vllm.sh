@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Activate conda environment
+source ~/anaconda3/etc/profile.d/conda.sh
+conda activate hm-ana
+
 export CUDA_VISIBLE_DEVICES=0
 
 MODEL_NAME="Qwen/Qwen2.5-VL-7B-Instruct"
