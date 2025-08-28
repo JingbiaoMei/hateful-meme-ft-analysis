@@ -17,7 +17,7 @@ pref_loss: sigmoid  # choices: [sigmoid (dpo), orpo, simpo]
 dataset: fb_qwen25vl3b_dpo
 template: qwen2_vl
 cutoff_len: 2048
-max_samples: 1000
+max_samples: 100000
 overwrite_cache: true
 preprocessing_num_workers: 16
 dataloader_num_workers: 4
@@ -33,8 +33,8 @@ save_only_model: false
 report_to: wandb  # choices: [none, wandb, tensorboard, swanlab, mlflow]
 
 ### train
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 16
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 2
 learning_rate: 5.0e-6
 num_train_epochs: 3.0
 lr_scheduler_type: cosine
