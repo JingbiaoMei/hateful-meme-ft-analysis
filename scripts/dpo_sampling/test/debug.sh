@@ -7,8 +7,8 @@ python src/sampling/generate_dpo_data.py \
     --max_entries 10 \
     --num_responses 8 \
     --model_name Qwen/Qwen2.5-VL-7B-Instruct \
-    --temperature 0.7 \
+    --temperature 1.0 \
     --max_new_tokens 150 \
     --max_pixels 401408 \
-    --batch_size 4 \
+    --batch_size 8 \
     --use_flash_attention
