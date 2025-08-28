@@ -348,7 +348,7 @@ class VLLMResponseGenerator:
                 "responses": entry_responses
             })
             
-            print(f"Entry {entry.get('id', 'unknown')}: {len(entry_responses)}/{num_responses} responses generated")
+            #print(f"Entry {entry.get('id', 'unknown')}: {len(entry_responses)}/{num_responses} responses generated")
         
         return results
 
@@ -646,17 +646,17 @@ def convert_to_llamafactory_dpo_format(
         
         # Track different failure cases
         if not chosen_text and not rejected_text:
-            print(f"Skipping entry {entry.get('id', 'unknown')} - both chosen and rejected are missing")
+            #print(f"Skipping entry {entry.get('id', 'unknown')} - both chosen and rejected are missing")
             stats['both_missing'] += 1
             stats['skip'] += 1
             continue
         elif not chosen_text:
-            print(f"Skipping entry {entry.get('id', 'unknown')} - no chosen response available")
+            #print(f"Skipping entry {entry.get('id', 'unknown')} - no chosen response available")
             stats['no_chosen'] += 1
             stats['skip'] += 1
             continue
         elif not rejected_text:
-            print(f"Skipping entry {entry.get('id', 'unknown')} - no rejected response available")
+            #print(f"Skipping entry {entry.get('id', 'unknown')} - no rejected response available")
             stats['no_rejected'] += 1
             stats['skip'] += 1
             continue
