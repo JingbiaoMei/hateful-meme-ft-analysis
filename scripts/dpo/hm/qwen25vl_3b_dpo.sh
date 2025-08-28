@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=1 llamafactory-cli train scripts/dpo/hm/qwen2_5vl_3b_lora_dpo.yaml
+llamafactory-cli train scripts/dpo/hm/qwen2_5vl_3b_lora_dpo.yaml

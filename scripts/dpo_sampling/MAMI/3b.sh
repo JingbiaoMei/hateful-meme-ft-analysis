@@ -4,7 +4,6 @@
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate hm-ana
 
-export CUDA_VISIBLE_DEVICES=1
 
 MODEL_NAME="Qwen/Qwen2.5-VL-3B-Instruct"
 INPUT_DATA="data/gt/MAMI/train.jsonl"
