@@ -14,7 +14,7 @@ pref_beta: 0.1
 pref_loss: sigmoid  # choices: [sigmoid (dpo), orpo, simpo]
 
 ### dataset
-dataset: fb_qwen25vl7b_dpo
+dataset: fb_qwen25vl3b_dpo
 template: qwen2_vl
 cutoff_len: 2048
 max_samples: 1000
