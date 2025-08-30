@@ -541,7 +541,7 @@ def main():
     
     # Query argument
     parser.add_argument('--query', type=str, 
-                        default="Please identify if the meme is hateful or not.\nOutput the thinking process in <think> </think> and final answer in <answer> </answer> tags.\n For the thinking process, consider both the image and any accompanying text. Evaluate the historical, cultural, and social context surrounding the meme. Analyze different interpretations, including potential humor or satirical elements versus actual hate content. Reflect on broader social and racial implications. Consider if the meme perpetuates harmful stereotypes or could be seen as targeting a particular group. Assess how various audiences might perceive the content. Weigh the intent behind the meme against its potential for harm. Synthesize your reasoning and decide if the meme qualifies as hateful.\n The answer should be Yes or No, if the meme is hateful than output <answer> Yes </answer>; if the meme is Benign than output <answer> No </answer>. The output format should be as follows:\n<think> ... </think> <answer> ... </answer>\n. Please strictly follow the format.", 
+                        default="<image>Is it hateful? Output the thinking process in <think> </think> and final answer in <answer> </answer> tags. The answer should be Yes or No, if the meme is hateful than output Yes ; if the meme is Benign than output No. The output format should be as follows: <think> ... </think> <answer>...</answer> Please strictly follow the format.", 
                         help='Query to pass to the model')
     
     # vLLM-specific arguments
