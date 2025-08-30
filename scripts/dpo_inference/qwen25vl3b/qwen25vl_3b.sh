@@ -8,6 +8,7 @@ experiments=(
     "dpo-beta0.5"
     "dpo-beta0.7"
     "dpo-beta0.9"
+    "dpo-beta0.1-ep3"
 )
 
 # Run inference for each experiment
