@@ -184,6 +184,7 @@ class VLLMInferenceEngine:
             "disable_log_stats": True,
             "enable_lora": enable_lora,
             "limit_mm_per_prompt": {"image": 1, "video": 1, "audio": 1},  # Each request has only 1 image
+            "max_lora_rank": 64,
             **vllm_kwargs
         }
         
