@@ -7,5 +7,5 @@ python src/inference/qwen2_hm_inference_vllm.py \
     --processor_path "Qwen/Qwen2.5-VL-7B-Instruct" \
     --data_split "dev_seen test_seen" \
     --dataset "FB" \
-    --batch_size 8 \
-    --log_name "qwen25vl_7b_vllm"
+    --batch_size 1000 \
+    --log_name "qwen25vl_7b_vllm_batch"

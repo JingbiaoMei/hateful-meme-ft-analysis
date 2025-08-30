@@ -31,6 +31,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import io
 import re
 import json
+import gc
 import torch
 import numpy as np
 from PIL import Image
@@ -114,7 +115,7 @@ class VLLMInferenceEngine:
     """vLLM-based inference engine for hateful meme classification."""
     
     def __init__(self, 
-                 model_path: str,
+                 model_path: str = None,
                  base_model_path: str = None,
                  processor_path: str = None,
                  adapter_name_or_path: str = None,
@@ -171,7 +172,7 @@ class VLLMInferenceEngine:
             # Use the main model path
             model_name_or_path = model_path
             enable_lora = False
-        
+        print(model_name_or_path)
         # Initialize vLLM engine
         engine_args = {
             "model": model_name_or_path,
@@ -316,109 +317,156 @@ class VLLMInferenceEngine:
             logging.error(f"Error converting image: {e}")
             return None
     
-    def run_inference_on_batch(self, batch, query: str):
+    def prepare_all_requests(self, dataloader, query: str):
         """
-        Process a batch of data using vLLM.
+        Prepare all requests upfront for batch processing.
         Uses the exact same approach as the working generate_dpo_data_vllm.py script.
         
         Args:
-            batch: Batch of (images, texts, labels, image_ids)
+            dataloader: DataLoader for the data
             query: Query template to use
+            
+        Returns:
+            Tuple of (all_requests, request_metadata)
+        """
+        all_requests = []
+        request_metadata = []
+        
+        question = "This is an image with \"{text}\" written on it." + query
+        
+        logging.info("Preparing all requests for batch processing...")
+        
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Preparing requests")):
+            images, texts, labels, image_ids = batch
+            
+            for idx, (img_tensor, text, img_id, label) in enumerate(zip(images, texts, image_ids, labels)):
+                try:
+                    formatted_question = question.format(text=text)
+                    
+                    # Convert dataloader tensor to PIL Image using the new method
+                    image = self.load_image_from_dataloader(img_tensor)
+                    if image is None:
+                        logging.error(f"Failed to convert image tensor for {img_id}")
+                        continue
+                    
+                    # Use the working chat template approach from generate_dpo_data_vllm.py
+                    formatted_prompt = self._prepare_conversation_format(f"<image>{formatted_question}", image)
+                    
+                    # Prepare multimodal data using the working approach
+                    multi_modal_data = self._prepare_multimodal_data(image)
+                    
+                    # Create vLLM input format exactly like the working script
+                    if multi_modal_data is not None:
+                        # For multimodal inputs, use the formatted prompt with multimodal data
+                        vllm_input = {
+                            "prompt": formatted_prompt,
+                            "multi_modal_data": multi_modal_data
+                        }
+                    else:
+                        # For text-only inputs, just use the formatted prompt
+                        vllm_input = {
+                            "prompt": formatted_prompt
+                        }
+                    
+                    all_requests.append(vllm_input)
+                    request_metadata.append({
+                        "image_id": img_id,
+                        "text": text,
+                        "label": label.item(),
+                        "batch_idx": batch_idx,
+                        "idx_in_batch": idx
+                    })
+                    
+                except Exception as e:
+                    logging.error(f"Error preparing request for image {img_id}: {e}")
+                    continue
+        
+        logging.info(f"Prepared {len(all_requests)} requests for vLLM batch processing")
+        return all_requests, request_metadata
+    
+    def process_requests_in_batches(self, all_requests, request_metadata, batch_size):
+        """
+        Process all requests in batches using vLLM.
+        Uses the exact same approach as the working generate_dpo_data_vllm.py script.
+        
+        Args:
+            all_requests: List of vLLM input requests
+            request_metadata: List of metadata for each request
+            batch_size: Batch size for processing
             
         Returns:
             Tuple of (batch_results, batch_text_preds, batch_labels, batch_rewards, batch_ids)
         """
-        images, texts, labels, image_ids = batch
+        all_results = []
+        all_text_predictions = []
+        all_labels = []
+        all_rewards = []
+        all_ids = []
         
-        # Process each image individually to avoid vLLM multimodal batching issues
-        batch_results = []
-        batch_text_preds = []
-        batch_labels = []
-        batch_rewards = []
-        processed_ids = []
-        
-        question = "This is an image with \"{text}\" written on it." + query
-        
-        for idx, (img_tensor, text, img_id, label) in enumerate(zip(images, texts, image_ids, labels)):
+        # Process in batches to avoid memory issues
+        for i in tqdm(range(0, len(all_requests), batch_size), desc="Processing vLLM batches"):
+            batch_requests = all_requests[i:i + batch_size]
+            batch_metadata = request_metadata[i:i + batch_size]
+            
             try:
-                formatted_question = question.format(text=text)
+                # Generate responses for this batch - this is where the true batching happens!
+                batch_results = self.llm.generate(batch_requests, self.sampling_params, lora_request=self.lora_request)
                 
-                # Convert dataloader tensor to PIL Image using the new method
-                image = self.load_image_from_dataloader(img_tensor)
-                if image is None:
-                    logger.error(f"Failed to convert image tensor for {img_id}")
-                    continue
-                
-                # Use the working chat template approach from generate_dpo_data_vllm.py
-                formatted_prompt = self._prepare_conversation_format(f"<image>{formatted_question}", image)
-                
-                # Prepare multimodal data using the working approach
-                multi_modal_data = self._prepare_multimodal_data(image)
-                
-                # Create vLLM input format exactly like the working script
-                if multi_modal_data is not None:
-                    # For multimodal inputs, use the formatted prompt with multimodal data
-                    vllm_input = {
-                        "prompt": formatted_prompt,
-                        "multi_modal_data": multi_modal_data
-                    }
-                else:
-                    # For text-only inputs, just use the formatted prompt
-                    vllm_input = {
-                        "prompt": formatted_prompt
-                    }
-                
-                # Process this single image exactly like the working script
-                try:
-                    single_result = self.llm.generate([vllm_input], self.sampling_params, lora_request=self.lora_request)
-                    response = single_result[0].outputs[0].text
-                    
-                    # Process the response
-                    thinking_match = re.search(r'<think>(.*?)</think>', response, re.DOTALL)
-                    thinking = thinking_match.group(1).strip() if thinking_match else ""
-                    
-                    answer_match = re.search(r'<answer>(.*?)</answer>', response, re.DOTALL)
-                    if not answer_match:
-                        logger.warning(f"No answer tag found in response for image {img_id}: {response}")
-                        continue
+                # Extract generated text and process responses
+                for result, metadata in zip(batch_results, batch_metadata):
+                    try:
+                        response = result.outputs[0].text
                         
-                    answer = answer_match.group(1).strip().lower()
-                    gt = 'yes' if int(label.item()) == 1 else 'no'
-                    reward = exact_match_reward(response, gt)
-                    
-                    text_pred = 1 if "yes" in answer.lower() else 0
+                        # Process the response
+                        thinking_match = re.search(r'<think>(.*?)</think>', response, re.DOTALL)
+                        thinking = thinking_match.group(1).strip() if thinking_match else ""
+                        
+                        answer_match = re.search(r'<answer>(.*?)</answer>', response, re.DOTALL)
+                        if not answer_match:
+                            logging.warning(f"No answer tag found in response for image {metadata['image_id']}: {response}")
+                            continue
+                            
+                        answer = answer_match.group(1).strip().lower()
+                        gt = 'yes' if int(metadata['label']) == 1 else 'no'
+                        reward = exact_match_reward(response, gt)
+                        
+                        text_pred = 1 if "yes" in answer.lower() else 0
 
-                    result = {
-                        'image_id': img_id,
-                        'true_label': int(label.item()),
-                        'text_prediction': text_pred,
-                        'raw_output': response,
-                        'thinking': thinking,
-                        'text_answer': answer,
-                        'correct': text_pred == int(label.item()),
-                        'reward': reward,
-                    }
-                    
-                    batch_text_preds.append(text_pred)
-                    batch_labels.append(label.item())
-                    batch_results.append(result)
-                    batch_rewards.append(reward)
-                    processed_ids.append(img_id)
-                    
-                except Exception as e:
-                    logger.error(f"Error during vLLM generation for image {img_id}: {e}")
-                    continue
+                        result_dict = {
+                            'image_id': metadata['image_id'],
+                            'true_label': int(metadata['label']),
+                            'text_prediction': text_pred,
+                            'raw_output': response,
+                            'thinking': thinking,
+                            'text_answer': answer,
+                            'correct': text_pred == int(metadata['label']),
+                            'reward': reward,
+                        }
+                        
+                        all_text_predictions.append(text_pred)
+                        all_labels.append(metadata['label'])
+                        all_results.append(result_dict)
+                        all_rewards.append(reward)
+                        all_ids.append(metadata['image_id'])
+                        
+                    except Exception as e:
+                        logging.error(f"Error processing response for image {metadata['image_id']}: {e}")
+                        continue
+                
+                # Clear memory
+                del batch_results
+                gc.collect()
                 
             except Exception as e:
-                logger.error(f"Error preparing request for image {img_id}: {e}")
+                logging.error(f"Error processing batch {i//batch_size + 1}: {e}")
                 continue
-                
-        return batch_results, batch_text_preds, batch_labels, batch_rewards, processed_ids
+        
+        return all_results, all_text_predictions, all_labels, all_rewards, all_ids
 
 
 def process_split_vllm(inference_engine, dataloader, split_name, args):
     """
-    Process a complete data split using vLLM.
+    Process a complete data split using vLLM with true batch processing.
     
     Args:
         inference_engine: VLLMInferenceEngine instance
@@ -429,44 +477,34 @@ def process_split_vllm(inference_engine, dataloader, split_name, args):
     Returns:
         Dictionary with results and metrics
     """
-    logger.info(f"Processing {split_name} split using vLLM...")
+    logging.info(f"Processing {split_name} split using vLLM...")
     
-    # Track predictions
-    all_results = []
-    all_text_predictions = []
-    all_labels = []
-    all_ids = []
-    all_rewards = []
+    # Step 1: Prepare all requests upfront (like the working sampling script)
+    all_requests, request_metadata = inference_engine.prepare_all_requests(dataloader, args.query)
     
-    # Process batches
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Processing {split_name}")):
-        # In debug mode, only process specified number of batches
-        if args.debug and batch_idx >= args.debug_batches:
-            logger.info(f"Debug mode: Stopping after {args.debug_batches} batches")
-            break
-        
-        batch_results, batch_text_preds, batch_labels, batch_rewards, batch_ids = inference_engine.run_inference_on_batch(
-            batch, args.query
-        )
-        
-        all_results.extend(batch_results)
-        all_text_predictions.extend(batch_text_preds)
-        all_labels.extend(batch_labels)
-        all_ids.extend(batch_ids)
-        all_rewards.extend(batch_rewards)
-        
-        # Optional: Clear GPU memory periodically
-        if batch_idx % 10 == 0:
-            torch.cuda.empty_cache()
-            gc.collect()
+    if not all_requests:
+        logging.warning(f"{split_name} - No valid requests were prepared")
+        return {
+            'metrics': [0.0, 0.0, 0.0, 0.0, 0.0],
+            'results': [],
+            'ids': [],
+            'labels': [],
+            'predictions': [],
+            'rewards': [],
+        }
+    
+    # Step 2: Process all requests in true batches (this is where the performance gain happens!)
+    all_results, all_text_predictions, all_labels, all_rewards, all_ids = inference_engine.process_requests_in_batches(
+        all_requests, request_metadata, args.batch_size
+    )
     
     # Calculate metrics if we have predictions
     if all_text_predictions:
         metrics = evaluate_predictions(all_labels, all_text_predictions, all_rewards)
-        logger.info(f"{split_name} - Metrics: Acc={metrics[0]:.4f}, P={metrics[1]:.4f}, R={metrics[2]:.4f}, F1={metrics[3]:.4f}, Reward={metrics[4]:.4f}")
+        logging.info(f"{split_name} - Metrics: Acc={metrics[0]:.4f}, P={metrics[1]:.4f}, R={metrics[2]:.4f}, F1={metrics[3]:.4f}, Reward={metrics[4]:.4f}")
     else:
         metrics = [0.0, 0.0, 0.0, 0.0, 0.0]
-        logger.warning(f"{split_name} - No valid predictions were collected")
+        logging.warning(f"{split_name} - No valid predictions were collected")
     
     return {
         'metrics': metrics,
@@ -482,7 +520,7 @@ def main():
     parser = argparse.ArgumentParser(description='Hateful Memes Classification with Qwen2-VL using vLLM')
     
     # Model arguments
-    parser.add_argument('--model_path', type=str, required=True, help='Path to model checkpoint or model name')
+    parser.add_argument('--model_path', type=str, default=None, help='Path to model checkpoint or model name')
     parser.add_argument('--base_model_path', type=str, default=None, help='Path to base model checkpoint (for LoRA)')
     parser.add_argument('--processor_path', type=str, required=True, help='Path to processor/tokenizer')
     parser.add_argument('--adapter_name_or_path', type=str, default=None, help='Path to LoRA adapter')
@@ -495,7 +533,6 @@ def main():
     # Logging arguments
     parser.add_argument('--log_name', type=str, default="", help='Log name')
     parser.add_argument('--group_name', type=str, default="inference_classifier_vllm", help='Group name for wandb')
-    parser.add_argument('--exp_name', type=str, default="")
     
     # Debug arguments
     parser.add_argument('--debug', action='store_true', default=False, help='Run in debug mode (process limited batches)')
@@ -523,13 +560,13 @@ def main():
         args.group_name = "debug_vllm"
     
     # Setup logging paths
-    model_name = os.path.basename(args.model_path)
-    log_path = f"./logging/{args.exp_name}/{args.dataset}/{args.log_name}/"
+    model_name = os.path.basename(args.model_path) if args.model_path else os.path.basename(args.base_model_path)
+    log_path = f"./logging/{args.dataset}/{args.log_name}/"
     os.makedirs(log_path, exist_ok=True)
     log_path += args.log_name + ".csv"
     
     # Initialize wandb
-    exp_name = f"{args.log_name}_{args.dataset}_vllm"
+    exp_name = f"{args.log_name}_{args.dataset}"
     tags = [args.dataset, model_name, "vllm"]
     if args.debug:
         tags.append("debug")
