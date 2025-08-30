@@ -26,7 +26,7 @@ dataset_dir: dpo_data
 ### output
 output_dir: checkpoints/fb/qwen2_5vl-3b/dpo
 logging_steps: 10
-save_steps: 50
+save_steps: 100
 plot_loss: true
 overwrite_output_dir: true
 save_only_model: false

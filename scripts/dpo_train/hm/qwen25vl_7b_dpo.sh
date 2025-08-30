@@ -10,6 +10,12 @@ llamafactory-cli train scripts/dpo/${dataset_name}/${model_name}_lora_dpo.yaml \
     lora_alpha=128 \
     output_dir=checkpoints/fb/${model_name}/dpo-rank64-beta0.1
 
+export WANDB_NAME=${dataset_name}_${model_name}_dpo-beta0.1-ep3
+llamafactory-cli train scripts/dpo/${dataset_name}/${model_name}_lora_dpo.yaml \
+    output_dir=checkpoints/fb/${model_name}/dpo-beta0.1 \
+    pref_beta=0.1 \
+    num_train_epochs=3.0
+
 export WANDB_NAME=${dataset_name}_${model_name}_dpo-beta0.1
 llamafactory-cli train scripts/dpo/${dataset_name}/${model_name}_lora_dpo.yaml \
     output_dir=checkpoints/fb/${model_name}/dpo-beta0.1 \
